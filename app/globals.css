@@ -1,0 +1,115 @@
+/* ─── Reset & base ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  /* Prevent iOS font-size bump on landscape */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: #f8fafc;
+  font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans',
+               'YuGothic', 'Yu Gothic', 'Noto Sans JP',
+               -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Prevent pull-to-refresh interfering with swipe */
+  overscroll-behavior-y: contain;
+}
+
+/* ─── MBR Keyframes ─────────────────────────────────────────────── */
+
+/* Check tap feedback — single ring */
+@keyframes mbr-dot-ripple {
+  0%   { transform: translate(-50%,-50%) scale(0.3); opacity: 0.7; }
+  100% { transform: translate(-50%,-50%) scale(2.8); opacity: 0; }
+}
+
+/* Clock colon blink */
+@keyframes mbr-blink {
+  50% { opacity: 0.12; }
+}
+
+/* Eye idle float — ultra-gentle */
+@keyframes mbr-float {
+  0%,100% { transform: translateY(0px); }
+  50%     { transform: translateY(-6px); }
+}
+
+/* WAKE UP text shimmer */
+@keyframes mbr-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+/* Eye blink — slow, lifelike */
+@keyframes mbr-eye-blink {
+  0%,85%,100% { transform: scaleY(1); }
+  91%         { transform: scaleY(0.04); }
+}
+
+/* Iris appear */
+@keyframes mbr-iris-in {
+  0%   { transform: scale(0.4); opacity: 0; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+/* Scan line — holding state */
+@keyframes mbr-scan {
+  0%,100% { opacity: 0.3; transform: translateY(-30%); }
+  50%     { opacity: 0.7; transform: translateY( 30%); }
+}
+
+/* WAKEUP completion: radial bloom */
+@keyframes mbr-bloom {
+  0%  { transform: translate(-50%,-50%) scale(0); opacity: 0.6; }
+  60% { opacity: 0.25; }
+  100%{ transform: translate(-50%,-50%) scale(1); opacity: 0; }
+}
+
+/* WAKEUP completion: concentric ring */
+@keyframes mbr-wave {
+  0%   { transform: translate(-50%,-50%) scale(0); opacity: 0.5; }
+  100% { transform: translate(-50%,-50%) scale(1); opacity: 0; }
+}
+
+/* WAKEUP / check: dot drift */
+@keyframes mbr-drift {
+  0%   { transform: translate(0,0) scale(1); opacity: 0.85; }
+  100% { transform: translate(var(--dx),var(--dy)) scale(0); opacity: 0; }
+}
+
+/* Done state halo breathe */
+@keyframes mbr-glow-pulse {
+  0%,100% { opacity: 0.4; transform: scale(1); }
+  50%     { opacity: 0.15; transform: scale(1.08); }
+}
+
+/* Phase dot breathe */
+@keyframes mbr-breathe {
+  0%,100% { transform: scale(1);   opacity: 1; }
+  50%     { transform: scale(1.5); opacity: 0.5; }
+}
+
+/* Tab/routine slide-in */
+@keyframes mbr-slide-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ─── Utility ───────────────────────────────────────────────────── */
+
+/* Smooth momentum scrolling on iOS */
+.scroll-smooth {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Safe area padding for iPhone notch / home bar */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
