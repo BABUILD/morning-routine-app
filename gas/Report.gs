@@ -6,6 +6,7 @@
 
 var REPORT_CONFIG = {
   DRAFT_TO: 'namimatsukanta@gmail.com',
+  GREETING_TO: 'ポスティングプロ　橋本様',
   REPORT_STATUS_COL: 15,          // O列：完了報告ステータス
   REPORT_STATUS_DONE: '下書き作成済み'
 };
@@ -25,12 +26,11 @@ function createCompletionReportDraft() {
   today.setHours(0, 0, 0, 0);
 
   // 報告対象を収集：配布最終日が昨日以前・未報告の行
-  var targets = [];   // { rowIdx, projectName, deliveryDate, method, qty, endDate }
+  var targets = [];
   for (var i = 1; i < data.length; i++) {
     var receivedAt = data[i][0];   // A: 受信日時
     var projectName = data[i][3];  // D: 案件名
     var deliveryDate = String(data[i][4] || '');  // E: 配布日（例 7/16～7/18）
-    var method = data[i][5];       // F: 配布方式
     var qty = data[i][6];          // G: 部数
     var reported = data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]; // O列
 
@@ -44,8 +44,6 @@ function createCompletionReportDraft() {
     targets.push({
       rowIdx: i + 1,
       projectName: projectName,
-      deliveryDate: deliveryDate,
-      method: method,
       qty: qty,
       endDate: endDate
     });
@@ -56,41 +54,55 @@ function createCompletionReportDraft() {
     return;
   }
 
-  // 案件ごとにまとめる
-  var order = [];
-  var projects = {};
+  // 完了日ごと → 案件ごとに部数を合算
+  var dateOrder = [];
+  var byDate = {};
   targets.forEach(function(t) {
-    var key = t.projectName + '|' + t.deliveryDate;
-    if (!projects[key]) {
-      projects[key] = { projectName: t.projectName, deliveryDate: t.deliveryDate, details: [], total: 0 };
-      order.push(key);
+    var dateKey = Utilities.formatDate(t.endDate, 'Asia/Tokyo', 'M月d日');
+    if (!byDate[dateKey]) {
+      byDate[dateKey] = { order: [], projects: {} , sortKey: t.endDate.getTime() };
+      dateOrder.push(dateKey);
+    }
+    var g = byDate[dateKey];
+    // 案件名の（市区名）は報告では外してまとめる
+    var name = t.projectName.replace(/（[^）]+）$/, '');
+    if (!g.projects[name]) {
+      g.projects[name] = 0;
+      g.order.push(name);
     }
     var q = parseInt(t.qty, 10);
-    projects[key].details.push((t.method || '') + (t.qty && t.qty !== '未抽出' ? t.qty + '部' : ''));
-    if (!isNaN(q)) projects[key].total += q;
+    if (!isNaN(q)) g.projects[name] += q;
   });
+  dateOrder.sort(function(a, b) { return byDate[a].sortKey - byDate[b].sortKey; });
 
-  // 下書き本文
+  // 下書き本文（実際の報告フォーマットに準拠）
   var bodyLines = [
-    'お世話になっております。',
-    'P.Post並松です。',
+    REPORT_CONFIG.GREETING_TO,
     '',
-    '下記案件の配布が完了しましたのでご報告いたします。',
+    'おはようございます！！',
+    '',
+    '下記案件につきまして、配布指定期間内にすべて配布完了いたしましたので、ご報告いたします。',
     ''
   ];
-  order.forEach(function(key) {
-    var p = projects[key];
-    bodyLines.push('■ ' + p.projectName);
-    bodyLines.push('　配布期間：' + p.deliveryDate);
-    if (p.total > 0) bodyLines.push('　配布部数：' + p.total + '部（' + p.details.join('、') + '）');
+
+  dateOrder.forEach(function(dateKey) {
+    var g = byDate[dateKey];
+    bodyLines.push('【' + dateKey + ' 配布完了】');
+    bodyLines.push('');
+    g.order.forEach(function(name) {
+      var qty = g.projects[name];
+      bodyLines.push('■' + name + '　' + (qty > 0 ? formatNumber(qty) + '部' : '部数要確認'));
+      bodyLines.push('');
+    });
     bodyLines.push('');
   });
-  bodyLines.push('ご確認のほどよろしくお願いいたします。');
+
+  bodyLines.push('以上、ご確認のほどよろしくお願いいたします。');
   bodyLines.push('');
-  bodyLines.push('P.Post　並松幹太');
+  bodyLines.push('P.Post並松');
 
   var todayStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'M/d');
-  var subject = '【配布完了報告】' + todayStr + '時点　' + order.length + '案件';
+  var subject = '【配布完了報告】' + todayStr;
 
   GmailApp.createDraft(REPORT_CONFIG.DRAFT_TO, subject, bodyLines.join('\n'));
 
@@ -100,10 +112,14 @@ function createCompletionReportDraft() {
     sheet.getRange(t.rowIdx, REPORT_CONFIG.REPORT_STATUS_COL).setValue(stamp);
   });
 
-  Logger.log('完了報告の下書きを作成しました：' + order.length + '案件 / ' + targets.length + '行');
+  Logger.log('完了報告の下書きを作成しました：' + targets.length + '行');
 }
 
-// 配布日文字列（例「7/16～7/18」「7/9～7/13」）から最終日のDateを返す
+function formatNumber(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// 配布日文字列（例「7/16～7/18」）から最終日のDateを返す
 // 年は受信日時から推定（年末年始またぎにも対応）
 function parseDeliveryEndDate(deliveryDate, receivedAt) {
   var m = String(deliveryDate).match(/(\d{1,2})\/(\d{1,2})\s*[～〜\-–]\s*(\d{1,2})\/(\d{1,2})/);
