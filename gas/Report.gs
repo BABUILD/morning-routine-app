@@ -6,6 +6,7 @@
 
 var REPORT_CONFIG = {
   DRAFT_TO: 'namimatsukanta@gmail.com',
+  NOTIFY_TO: 'namimatsukanta@gmail.com',   // 下書き作成の通知先
   GREETING_TO: 'ポスティングプロ　橋本様',
   REPORT_STATUS_COL: 15,          // O列：完了報告ステータス
   REPORT_STATUS_DONE: '下書き作成済み'
@@ -103,8 +104,9 @@ function createCompletionReportDraft() {
 
   var todayStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'M/d');
   var subject = '【配布完了報告】' + todayStr;
+  var draftBody = bodyLines.join('\n');
 
-  GmailApp.createDraft(REPORT_CONFIG.DRAFT_TO, subject, bodyLines.join('\n'));
+  GmailApp.createDraft(REPORT_CONFIG.DRAFT_TO, subject, draftBody);
 
   // 台帳に報告済みマーク
   var stamp = REPORT_CONFIG.REPORT_STATUS_DONE + '（' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd') + '）';
@@ -112,7 +114,44 @@ function createCompletionReportDraft() {
     sheet.getRange(t.rowIdx, REPORT_CONFIG.REPORT_STATUS_COL).setValue(stamp);
   });
 
+  // 下書き作成の通知メール
+  sendDraftNotification(subject, draftBody, dateOrder, targets.length);
+
   Logger.log('完了報告の下書きを作成しました：' + targets.length + '行');
+}
+
+// 下書きを作成したことを知らせる通知メール
+function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
+  try {
+    var lines = [
+      '配布完了報告のメール下書きを作成しました。',
+      '',
+      '【下書き件名】',
+      draftSubject,
+      '',
+      '【対象】',
+      '・完了日：' + dateOrder.join('、'),
+      '・台帳行数：' + rowCount + '行',
+      '',
+      '【下書き本文プレビュー】',
+      '----------------------------------------',
+      draftBody,
+      '----------------------------------------',
+      '',
+      'Gmailの下書きを開く：',
+      'https://mail.google.com/mail/u/0/#drafts',
+      '',
+      '内容を確認のうえ、宛先を取引先に変更して送信してください。'
+    ];
+
+    MailApp.sendEmail(
+      REPORT_CONFIG.NOTIFY_TO,
+      '【下書き作成完了】' + draftSubject,
+      lines.join('\n')
+    );
+  } catch (e) {
+    Logger.log('下書き通知メールの送信に失敗: ' + e.message);
+  }
 }
 
 function formatNumber(n) {
