@@ -1,6 +1,6 @@
 // ============================================================
 // 配布完了報告：配布日を過ぎた案件のメール下書きを自動作成する
-// タイマー（毎日1回・朝推奨）に createCompletionReportDraft を設定
+// タイマー（毎日1回・早朝）に createCompletionReportDraft を設定
 // 台帳O列「完了報告」で報告済み管理（二重報告防止）
 // ============================================================
 
@@ -9,7 +9,8 @@ var REPORT_CONFIG = {
   NOTIFY_TO: 'namimatsukanta@gmail.com',   // 下書き作成の通知先
   GREETING_TO: 'ポスティングプロ　橋本様',
   REPORT_STATUS_COL: 15,          // O列：完了報告ステータス
-  REPORT_STATUS_DONE: '下書き作成済み'
+  REPORT_STATUS_DONE: '下書き作成済み',
+  LOOKBACK_DAYS: 7                // 完了日が直近N日以内の案件のみ報告対象
 };
 
 function createCompletionReportDraft() {
@@ -17,7 +18,6 @@ function createCompletionReportDraft() {
   var sheet = ss.getSheetByName(CONFIG.LEDGER_SHEET_NAME);
   if (!sheet) return;
 
-  // O列ヘッダーがなければ作成
   if (sheet.getRange(1, REPORT_CONFIG.REPORT_STATUS_COL).getValue() === '') {
     sheet.getRange(1, REPORT_CONFIG.REPORT_STATUS_COL).setValue('完了報告');
   }
@@ -26,12 +26,15 @@ function createCompletionReportDraft() {
   var today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 報告対象を収集：配布最終日が昨日以前・未報告の行
+  // 古すぎる案件は対象外にする（初回や実行漏れ時の大量報告を防止）
+  var oldestAllowed = new Date(today.getTime());
+  oldestAllowed.setDate(oldestAllowed.getDate() - REPORT_CONFIG.LOOKBACK_DAYS);
+
   var targets = [];
   for (var i = 1; i < data.length; i++) {
     var receivedAt = data[i][0];   // A: 受信日時
     var projectName = data[i][3];  // D: 案件名
-    var deliveryDate = String(data[i][4] || '');  // E: 配布日（例 7/16～7/18）
+    var deliveryDate = String(data[i][4] || '');  // E: 配布日
     var qty = data[i][6];          // G: 部数
     var reported = data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]; // O列
 
@@ -40,7 +43,8 @@ function createCompletionReportDraft() {
 
     var endDate = parseDeliveryEndDate(deliveryDate, receivedAt);
     if (!endDate) continue;
-    if (endDate >= today) continue;  // まだ配布期間中・当日はスキップ
+    if (endDate >= today) continue;         // まだ配布期間中・当日はスキップ
+    if (endDate < oldestAllowed) continue;  // 古い案件はスキップ
 
     targets.push({
       rowIdx: i + 1,
@@ -61,12 +65,12 @@ function createCompletionReportDraft() {
   targets.forEach(function(t) {
     var dateKey = Utilities.formatDate(t.endDate, 'Asia/Tokyo', 'M月d日');
     if (!byDate[dateKey]) {
-      byDate[dateKey] = { order: [], projects: {} , sortKey: t.endDate.getTime() };
+      byDate[dateKey] = { order: [], projects: {}, sortKey: t.endDate.getTime() };
       dateOrder.push(dateKey);
     }
     var g = byDate[dateKey];
-    // 案件名の（市区名）は報告では外してまとめる
-    var name = t.projectName.replace(/（[^）]+）$/, '');
+    // 案件名の（市区名）を外し、余分な空白を正規化してまとめる
+    var name = String(t.projectName).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, ' ').trim();
     if (!g.projects[name]) {
       g.projects[name] = 0;
       g.order.push(name);
@@ -76,7 +80,6 @@ function createCompletionReportDraft() {
   });
   dateOrder.sort(function(a, b) { return byDate[a].sortKey - byDate[b].sortKey; });
 
-  // 下書き本文（実際の報告フォーマットに準拠）
   var bodyLines = [
     REPORT_CONFIG.GREETING_TO,
     '',
@@ -108,16 +111,40 @@ function createCompletionReportDraft() {
 
   GmailApp.createDraft(REPORT_CONFIG.DRAFT_TO, subject, draftBody);
 
-  // 台帳に報告済みマーク
   var stamp = REPORT_CONFIG.REPORT_STATUS_DONE + '（' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd') + '）';
   targets.forEach(function(t) {
     sheet.getRange(t.rowIdx, REPORT_CONFIG.REPORT_STATUS_COL).setValue(stamp);
   });
 
-  // 下書き作成の通知メール
   sendDraftNotification(subject, draftBody, dateOrder, targets.length);
 
   Logger.log('完了報告の下書きを作成しました：' + targets.length + '行');
+}
+
+// ============================================================
+// 一時使用：指定日より前に完了した案件を「報告済み（手動）」にする
+// 過去分の一括クリア用。CUTOFF より前の完了案件が対象
+// 実行後はこの関数を削除してOK
+// ============================================================
+function markOldRowsAsReported() {
+  var CUTOFF = new Date(2026, 6, 28);   // 2026/7/28 より前に完了した案件を対象
+  CUTOFF.setHours(0, 0, 0, 0);
+
+  var sheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID)
+                .getSheetByName(CONFIG.LEDGER_SHEET_NAME);
+  var data = sheet.getDataRange().getValues();
+  var count = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]) continue;
+    var endDate = parseDeliveryEndDate(String(data[i][4] || ''), data[i][0]);
+    if (!endDate) continue;
+    if (endDate >= CUTOFF) continue;
+
+    sheet.getRange(i + 1, REPORT_CONFIG.REPORT_STATUS_COL).setValue('報告済み（手動）');
+    count++;
+  }
+  Logger.log('過去分を報告済みにしました：' + count + '行');
 }
 
 // 下書きを作成したことを知らせる通知メール
@@ -177,7 +204,6 @@ function parseDeliveryEndDate(deliveryDate, receivedAt) {
   if (isNaN(base.getTime())) base = new Date();
   var year = base.getFullYear();
 
-  // 受信が12月で配布が1月なら翌年
   if (base.getMonth() + 1 === 12 && endMonth === 1) year += 1;
 
   var d = new Date(year, endMonth - 1, endDay);
