@@ -274,6 +274,8 @@ function extractEmailData(message) {
 
   // 全角数字・記号を半角に正規化してから解析する
   body = normalizeNumbers(body);
+  // 本文が1行に潰れている場合でも解析できるよう改行を補う
+  body = normalizeBodyForParsing(body);
 
   var lines = body.split(/\r?\n/).map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
 
@@ -341,6 +343,49 @@ function extractEmailData(message) {
     deliveryDate: headers[0].deliveryDate,
     rows: allRows
   };
+}
+
+// 日付ヘッダー・市区名＋配布方式の直前に改行を入れる
+// （HTMLメールで本文が1行に潰れた場合の保険。通常の本文には影響しない）
+function normalizeBodyForParsing(s) {
+  s = s.replace(/(\d{1,2}\/\d{1,2}\s*[～〜\-–]\s*\d{1,2}\/\d{1,2})/g, '\n$1');
+  s = s.replace(/([^\n\s　:：]{2,}[都道府県市区町村])([\s　:：]*(?:集合|戸建|ローラー))/g, '\n$1$2');
+  return s;
+}
+
+// ============================================================
+// 診断用：抽出ロジックが最新版かどうかを確認する
+// 実行してログに2案件・4明細が出れば最新版が動いている
+// ============================================================
+function testExtraction() {
+  var sample = [
+    '並松様',
+    '',
+    'いつもお世話になっております。',
+    '宅配依頼です。',
+    '',
+    '7/30〜7/31　ワコーレノイエ垂水歌敷山　13500部　在庫あり',
+    '垂水区　集合6600部　4円/部　戸建6900部　5円/部',
+    '禁止リストがありますのでスタッフ間で共有願います。',
+    '',
+    '7/30〜8/2　サンクレイドル岸和田春木　6000部　在庫あり',
+    '泉北郡忠岡町　集合1500部　4.2円/部',
+    '貝塚市　集合4500部　4.2円/部',
+    '',
+    '沖'
+  ].join('\n');
+
+  var fakeMessage = {
+    getPlainBody: function() { return sample; },
+    getBody: function() { return sample; }
+  };
+
+  var result = extractEmailData(fakeMessage);
+  Logger.log('抽出行数: ' + result.rows.length);
+  result.rows.forEach(function(r, i) {
+    Logger.log((i + 1) + '. ' + r.projectName + ' | ' + r.deliveryDate + ' | ' +
+               r.method + ' | ' + r.quantity + '部 | ' + r.unitPrice + '円 | ' + r.amount);
+  });
 }
 
 // 全角数字・小数点・スラッシュを半角へ
