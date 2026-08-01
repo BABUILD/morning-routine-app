@@ -92,7 +92,7 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
        .setFontSize(18).setFontWeight('bold')
        .setNumberFormat('#,##0').setHorizontalAlignment('right');
   sheet.getRange('C7').setValue('円（税込）')
-       .setFontSize(18).setFontWeight('bold');
+       .setFontSize(14).setFontWeight('bold');
   sheet.getRange('A6:C7').setBorder(true, true, true, true, false, false);
 
   // ---- 振込口座情報（A8〜、請求金額ボックスの下）----
