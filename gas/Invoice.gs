@@ -77,7 +77,7 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   var lastDay = new Date(year, mon, 0).getDate();
   var C = INVOICE_CONFIG;
 
-  sheet.getRange('B1').setValue('請　求　書').setFontSize(20).setFontWeight('bold');
+  sheet.getRange('B1').setValue(mon + '月　請　求　書').setFontSize(20).setFontWeight('bold');
   sheet.getRange('A3').setValue(C.BILL_TO).setFontSize(14).setFontWeight('bold');
 
   sheet.getRange('F2').setValue('請求日：' + year + '/' + mon + '/' + lastDay);
