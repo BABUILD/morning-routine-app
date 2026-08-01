@@ -8,7 +8,7 @@ var INVOICE_CONFIG = {
   TARGET_MONTH: '2026-06',            // 請求対象月（yyyy-MM）
   COMPANY_NAME: 'P.Post　並松幹太',
   COMPANY_ADDRESS: '大阪市西区南堀江4-4-20',
-  BILL_TO: '株式会社未来絵 御中',
+  BILL_TO: 'ポスティングプロ 御中',
   TAX_RATE: 0.10,
   BANK_INFO: [
     '【お振込先】',
