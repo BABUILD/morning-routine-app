@@ -5,7 +5,7 @@
 // ============================================================
 
 var REPORT_CONFIG = {
-  DRAFT_TO: 'namimatsukanta@gmail.com',
+  DRAFT_TO: 'hashimoto@milaie.com',        // 下書きの宛先（送信は手動）
   NOTIFY_TO: 'namimatsukanta@gmail.com',   // 下書き作成の通知先
   GREETING_TO: 'ポスティングプロ　橋本様',
   REPORT_STATUS_COL: 15,          // O列：完了報告ステータス
@@ -168,7 +168,8 @@ function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
       'Gmailの下書きを開く：',
       'https://mail.google.com/mail/u/0/#drafts',
       '',
-      '内容を確認のうえ、宛先を取引先に変更して送信してください。'
+      '宛先は ' + REPORT_CONFIG.DRAFT_TO + ' が入力済みです。',
+      '内容を確認のうえ送信してください。'
     ];
 
     MailApp.sendEmail(
