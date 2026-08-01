@@ -70,16 +70,57 @@ function createMonthlyInvoice() {
 
   buildInvoiceSheet(sheet, rows, year, mon);
 
+  var folder = DriveApp.getFolderById(INVOICE_CONFIG.OUTPUT_FOLDER_ID);
   var file = DriveApp.getFileById(ss.getId());
-  DriveApp.getFolderById(INVOICE_CONFIG.OUTPUT_FOLDER_ID).addFile(file);
+  folder.addFile(file);
   DriveApp.getRootFolder().removeFile(file);
 
+  // PDFも同じフォルダに書き出す（グリッド線・メモなし）
+  var pdfUrl = '';
+  try {
+    SpreadsheetApp.flush();
+    var pdf = exportSheetAsPdf(ss.getId(), sheet.getSheetId(), ssName);
+    pdfUrl = folder.createFile(pdf).getUrl();
+  } catch (e) {
+    Logger.log('PDF書き出しに失敗: ' + e.message);
+  }
+
   Logger.log('請求書を作成しました：' + ss.getUrl());
+  if (pdfUrl) Logger.log('PDF：' + pdfUrl);
+}
+
+// 指定シートをPDFとして書き出す（グリッド線なし・A4縦・幅に合わせる）
+function exportSheetAsPdf(spreadsheetId, gid, fileName) {
+  var url = 'https://docs.google.com/spreadsheets/d/' + spreadsheetId + '/export'
+    + '?format=pdf'
+    + '&gid=' + gid
+    + '&size=A4'
+    + '&portrait=true'
+    + '&fitw=true'          // 幅をページに合わせる
+    + '&gridlines=false'    // グリッド線を印刷しない
+    + '&printnotes=false'   // メモを印刷しない
+    + '&sheetnames=false'
+    + '&printtitle=false'
+    + '&pagenumbers=false'
+    + '&horizontal_alignment=CENTER'
+    + '&top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5';
+
+  var resp = UrlFetchApp.fetch(url, {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  });
+  if (resp.getResponseCode() !== 200) {
+    throw new Error('PDFエクスポート失敗: HTTP ' + resp.getResponseCode());
+  }
+  return resp.getBlob().setName(fileName + '.pdf');
 }
 
 function buildInvoiceSheet(sheet, rows, year, mon) {
   var lastDay = new Date(year, mon, 0).getDate();
   var C = INVOICE_CONFIG;
+
+  // 画面・印刷ともグリッド線を非表示にする
+  sheet.setHiddenGridlines(true);
 
   sheet.getRange('B1').setValue(mon + '月　請　求　書').setFontSize(20).setFontWeight('bold');
   sheet.getRange('A3').setValue(C.BILL_TO).setFontSize(14).setFontWeight('bold');
