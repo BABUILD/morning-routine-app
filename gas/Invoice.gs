@@ -6,6 +6,9 @@
 
 var INVOICE_CONFIG = {
   TARGET_MONTH: '2026-06',            // 請求対象月（yyyy-MM）
+  // 請求月の判定基準：'start'=配布開始日 / 'end'=配布終了日
+  // 例）7/30～8/2 の案件は start なら7月分、end なら8月分
+  BILLING_BASIS: 'start',
   COMPANY_NAME: 'P.Post　並松幹太',
   COMPANY_ADDRESS: '大阪市西区南堀江4-4-20',
   BILL_TO: 'ポスティングプロ 御中',
@@ -47,8 +50,9 @@ function createMonthlyInvoice() {
     if (!projectName) continue;
     if (billStatus === '除外') continue;
 
-    var d = (receivedAt instanceof Date) ? receivedAt : new Date(receivedAt);
-    if (isNaN(d.getTime())) continue;
+    // 配布日を基準に請求月を判定する（受信日ではない）
+    var d = parseBillingDate(deliveryDate, receivedAt);
+    if (!d) continue;
     if (d.getFullYear() !== year || d.getMonth() + 1 !== mon) continue;
 
     rows.push([projectName, deliveryDate, method, qty, price]);
@@ -161,6 +165,43 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   sheet.getRange(headerRow, 1, detailValues.length + 1, 8).setBorder(true, true, true, true, true, true);
   sheet.getRange(headerRow + 1, 5, detailValues.length, 3).setNumberFormat('#,##0.##');
   sheet.getRange(headerRow + 1, 7, detailValues.length, 1).setNumberFormat('#,##0');
+}
+
+// 配布日文字列（例「7/30～8/2」「8/1～8/2」）から請求月判定用のDateを返す
+// BILLING_BASIS が 'start' なら開始日、'end' なら終了日を使う
+// 年は受信日時から推定（年末年始またぎにも対応）
+function parseBillingDate(deliveryDate, receivedAt) {
+  var s = String(deliveryDate || '');
+  var m = s.match(/(\d{1,2})\/(\d{1,2})\s*[～〜\-–]\s*(\d{1,2})\/(\d{1,2})/);
+  var month, day;
+
+  if (m) {
+    if (INVOICE_CONFIG.BILLING_BASIS === 'end') {
+      month = parseInt(m[3], 10);
+      day = parseInt(m[4], 10);
+    } else {
+      month = parseInt(m[1], 10);
+      day = parseInt(m[2], 10);
+    }
+  } else {
+    var single = s.match(/(\d{1,2})\/(\d{1,2})/);
+    if (!single) return null;
+    month = parseInt(single[1], 10);
+    day = parseInt(single[2], 10);
+  }
+
+  var base = (receivedAt instanceof Date) ? receivedAt : new Date(receivedAt);
+  if (isNaN(base.getTime())) return null;
+  var year = base.getFullYear();
+
+  // 受信が12月で配布が1月なら翌年
+  if (base.getMonth() + 1 === 12 && month === 1) year += 1;
+  // 受信が1月で配布が12月なら前年
+  if (base.getMonth() + 1 === 1 && month === 12) year -= 1;
+
+  var d = new Date(year, month - 1, day);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 // フォルダ内からファイル名にキーワードを含む画像を探し、
