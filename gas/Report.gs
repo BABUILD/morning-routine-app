@@ -49,8 +49,10 @@ function createCompletionReportDraft() {
     targets.push({
       rowIdx: i + 1,
       projectName: projectName,
+      deliveryDate: deliveryDate,
       qty: qty,
-      endDate: endDate
+      endDate: endDate,
+      receivedAt: (receivedAt instanceof Date) ? receivedAt.getTime() : new Date(receivedAt).getTime()
     });
   }
 
@@ -59,10 +61,24 @@ function createCompletionReportDraft() {
     return;
   }
 
-  // 完了日ごと → 案件ごとに部数を合算
+  // 同じ案件＋配布日の行が複数ある場合（修正メール・再処理による重複）、
+  // 最新の受信メール由来の行だけを部数集計に使う
+  var latestByProject = {};
+  targets.forEach(function(t) {
+    var key = String(t.projectName).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '') + '|' + t.deliveryDate;
+    if (!latestByProject[key] || t.receivedAt > latestByProject[key]) {
+      latestByProject[key] = t.receivedAt;
+    }
+  });
+  var countTargets = targets.filter(function(t) {
+    var key = String(t.projectName).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '') + '|' + t.deliveryDate;
+    return t.receivedAt === latestByProject[key];
+  });
+
+  // 完了日ごと → 案件ごとに部数を合算（最新メール由来の行のみ）
   var dateOrder = [];
   var byDate = {};
-  targets.forEach(function(t) {
+  countTargets.forEach(function(t) {
     var dateKey = Utilities.formatDate(t.endDate, 'Asia/Tokyo', 'M月d日');
     if (!byDate[dateKey]) {
       byDate[dateKey] = { order: [], projects: {}, sortKey: t.endDate.getTime() };
