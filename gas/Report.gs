@@ -1,6 +1,7 @@
 // ============================================================
-// 配布完了報告：配布日を過ぎた案件のメール下書きを自動作成する
-// タイマー（毎日1回・早朝）に createCompletionReportDraft を設定
+// 配布完了報告：配布が完了した案件のメール下書きを自動作成する
+// タイマー（毎日1回・夕方）に createCompletionReportDraft を設定
+//   → 当日完了分をその日の夕方に報告できる
 // 台帳O列「完了報告」で報告済み管理（二重報告防止）
 // ============================================================
 
@@ -43,7 +44,7 @@ function createCompletionReportDraft() {
 
     var endDate = parseDeliveryEndDate(deliveryDate, receivedAt);
     if (!endDate) continue;
-    if (endDate >= today) continue;         // まだ配布期間中・当日はスキップ
+    if (endDate > today) continue;          // 配布期間中（明日以降が最終日）はスキップ
     if (endDate < oldestAllowed) continue;  // 古い案件はスキップ
 
     targets.push({
@@ -99,7 +100,7 @@ function createCompletionReportDraft() {
   var bodyLines = [
     REPORT_CONFIG.GREETING_TO,
     '',
-    'おはようございます！！',
+    'お世話になっております。',
     '',
     '下記案件につきまして、配布指定期間内にすべて配布完了いたしましたので、ご報告いたします。',
     ''
