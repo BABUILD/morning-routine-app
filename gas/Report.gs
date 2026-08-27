@@ -214,6 +214,81 @@ function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
   }
 }
 
+// ============================================================
+// 診断用：報告に集計された行を洗い出す
+// 実行すると直近14日に完了した全行を、完了日ごとにログ表示する
+// （報告済みフラグは無視して全件表示）
+// ============================================================
+function debugReportRows() {
+  var DAYS = 14;
+  var sheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID)
+                .getSheetByName(CONFIG.LEDGER_SHEET_NAME);
+  var data = sheet.getDataRange().getValues();
+
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var oldest = new Date(today.getTime());
+  oldest.setDate(oldest.getDate() - DAYS);
+
+  var found = [];
+  for (var i = 1; i < data.length; i++) {
+    var projectName = data[i][3];
+    if (!projectName || projectName === '未抽出') continue;
+
+    var deliveryDate = String(data[i][4] || '');
+    var endDate = parseDeliveryEndDate(deliveryDate, data[i][0]);
+    if (!endDate) continue;
+    if (endDate > today || endDate < oldest) continue;
+
+    found.push({
+      row: i + 1,
+      endKey: Utilities.formatDate(endDate, 'Asia/Tokyo', 'M月d日'),
+      sortKey: endDate.getTime(),
+      received: Utilities.formatDate(
+        (data[i][0] instanceof Date) ? data[i][0] : new Date(data[i][0]),
+        'Asia/Tokyo', 'MM/dd HH:mm'),
+      subject: data[i][2],
+      projectName: projectName,
+      deliveryDate: deliveryDate,
+      method: data[i][5],
+      qty: data[i][6],
+      price: data[i][7],
+      reported: data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]
+    });
+  }
+
+  found.sort(function(a, b) {
+    if (a.sortKey !== b.sortKey) return a.sortKey - b.sortKey;
+    return String(a.projectName).localeCompare(String(b.projectName));
+  });
+
+  var currentKey = '';
+  var groupTotal = {};
+  found.forEach(function(f) {
+    if (f.endKey !== currentKey) {
+      currentKey = f.endKey;
+      Logger.log('===== 【' + currentKey + ' 配布完了】 =====');
+    }
+    Logger.log(
+      '行' + f.row + ' | ' + f.projectName + ' | 配布日:' + f.deliveryDate +
+      ' | ' + f.method + ' ' + f.qty + '部 ' + f.price + '円' +
+      ' | 受信:' + f.received +
+      ' | 件名:' + f.subject +
+      (f.reported ? ' | ' + f.reported : ' | 未報告')
+    );
+    var name = projectKey(f.projectName);
+    var gkey = f.endKey + '/' + name;
+    var q = parseInt(f.qty, 10);
+    groupTotal[gkey] = (groupTotal[gkey] || 0) + (isNaN(q) ? 0 : q);
+  });
+
+  Logger.log('');
+  Logger.log('===== 案件ごとの合計（完了日/案件名） =====');
+  Object.keys(groupTotal).forEach(function(k) {
+    Logger.log(k + ' → ' + formatNumber(groupTotal[k]) + '部');
+  });
+}
+
 // 案件名から市区名と空白を除いた比較用キー
 function projectKey(name) {
   return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
