@@ -37,7 +37,7 @@ function createMonthlyInvoice() {
                  .getSheetByName(CONFIG.LEDGER_SHEET_NAME);
   var data = ledger.getDataRange().getValues();
 
-  var rows = [];
+  var candidates = [];
   for (var i = 1; i < data.length; i++) {
     var receivedAt = data[i][0];
     var projectName = data[i][3];
@@ -55,8 +55,38 @@ function createMonthlyInvoice() {
     if (!d) continue;
     if (d.getFullYear() !== year || d.getMonth() + 1 !== mon) continue;
 
-    rows.push([projectName, deliveryDate, method, qty, price]);
+    candidates.push({
+      projectName: projectName,
+      deliveryDate: deliveryDate,
+      method: method,
+      qty: qty,
+      price: price,
+      receivedAt: (receivedAt instanceof Date) ? receivedAt.getTime() : new Date(receivedAt).getTime()
+    });
   }
+
+  // ① 同じ案件＋配布日が複数の受信メールから来ている場合は最新メール由来を採用
+  var latestByProject = {};
+  candidates.forEach(function(c) {
+    var key = invoiceProjectKey(c.projectName) + '|' + c.deliveryDate;
+    if (!latestByProject[key] || c.receivedAt > latestByProject[key]) {
+      latestByProject[key] = c.receivedAt;
+    }
+  });
+
+  // ② 同一メールの二重処理による完全重複行を除外（二重請求の防止）
+  var seenRows = {};
+  var rows = [];
+  candidates.forEach(function(c) {
+    var key = invoiceProjectKey(c.projectName) + '|' + c.deliveryDate;
+    if (c.receivedAt !== latestByProject[key]) return;
+
+    var rowKey = [String(c.projectName).replace(/[\s　]+/g, ''), c.deliveryDate,
+                  c.method, c.qty, c.price].join('|');
+    if (seenRows[rowKey]) return;
+    seenRows[rowKey] = true;
+    rows.push([c.projectName, c.deliveryDate, c.method, c.qty, c.price]);
+  });
 
   if (rows.length === 0) {
     Logger.log('対象月 ' + month + ' の請求対象データがありません');
@@ -206,6 +236,11 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   sheet.getRange(headerRow, 1, detailValues.length + 1, 8).setBorder(true, true, true, true, true, true);
   sheet.getRange(headerRow + 1, 5, detailValues.length, 3).setNumberFormat('#,##0.##');
   sheet.getRange(headerRow + 1, 7, detailValues.length, 1).setNumberFormat('#,##0');
+}
+
+// 案件名から市区名と空白を除いた比較用キー
+function invoiceProjectKey(name) {
+  return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
 }
 
 // 配布日文字列（例「7/30～8/2」「8/1～8/2」）から請求月判定用のDateを返す

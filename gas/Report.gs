@@ -36,7 +36,9 @@ function createCompletionReportDraft() {
     var receivedAt = data[i][0];   // A: 受信日時
     var projectName = data[i][3];  // D: 案件名
     var deliveryDate = String(data[i][4] || '');  // E: 配布日
+    var method = data[i][5];       // F: 配布方式
     var qty = data[i][6];          // G: 部数
+    var price = data[i][7];        // H: 単価
     var reported = data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]; // O列
 
     if (!projectName || projectName === '未抽出') continue;
@@ -51,7 +53,9 @@ function createCompletionReportDraft() {
       rowIdx: i + 1,
       projectName: projectName,
       deliveryDate: deliveryDate,
+      method: method,
       qty: qty,
+      price: price,
       endDate: endDate,
       receivedAt: (receivedAt instanceof Date) ? receivedAt.getTime() : new Date(receivedAt).getTime()
     });
@@ -62,18 +66,29 @@ function createCompletionReportDraft() {
     return;
   }
 
-  // 同じ案件＋配布日の行が複数ある場合（修正メール・再処理による重複）、
-  // 最新の受信メール由来の行だけを部数集計に使う
+  // ① 同じ案件＋配布日の行が複数の受信メールから来ている場合（修正メール等）、
+  //    最新の受信メール由来の行だけを採用する
   var latestByProject = {};
   targets.forEach(function(t) {
-    var key = String(t.projectName).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '') + '|' + t.deliveryDate;
+    var key = projectKey(t.projectName) + '|' + t.deliveryDate;
     if (!latestByProject[key] || t.receivedAt > latestByProject[key]) {
       latestByProject[key] = t.receivedAt;
     }
   });
-  var countTargets = targets.filter(function(t) {
-    var key = String(t.projectName).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '') + '|' + t.deliveryDate;
-    return t.receivedAt === latestByProject[key];
+
+  // ② 同一メールが二重処理されて出来た完全重複行を除外する
+  //    （案件名は市区名込みで比較するので、別地区の同条件行は残る）
+  var seenRows = {};
+  var countTargets = [];
+  targets.forEach(function(t) {
+    var key = projectKey(t.projectName) + '|' + t.deliveryDate;
+    if (t.receivedAt !== latestByProject[key]) return;
+
+    var rowKey = [String(t.projectName).replace(/[\s　]+/g, ''), t.deliveryDate,
+                  t.method, t.qty, t.price].join('|');
+    if (seenRows[rowKey]) return;
+    seenRows[rowKey] = true;
+    countTargets.push(t);
   });
 
   // 完了日ごと → 案件ごとに部数を合算（最新メール由来の行のみ）
@@ -197,6 +212,11 @@ function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
   } catch (e) {
     Logger.log('下書き通知メールの送信に失敗: ' + e.message);
   }
+}
+
+// 案件名から市区名と空白を除いた比較用キー
+function projectKey(name) {
+  return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
 }
 
 function formatNumber(n) {
