@@ -149,22 +149,36 @@ function processSingleEmail(message, thread, savedLabel, senderInfo) {
       throw new Error('完了メール送信に失敗しました');
     }
 
-    writeProcessLog(logData);
     writeLedger(message, saveResult, extracted, correctionInfo, senderInfo);
+
+    // 台帳記録まで完了した時点で「成功」扱いにする
+    // （これ以降の失敗で再処理させると台帳が二重になるため）
+    logData.status = '成功';
+
     sendLineNotification(message, extracted, correctionInfo, saveResult);
 
-    savedLabel.addToThread(thread);
-    thread.moveToArchive();
-    logData.labelResult = '成功';
-    logData.archiveResult = '成功';
-    logData.status = '成功';
+    // ラベル付与・アーカイブの失敗はステータスを変えず各列に記録する
+    try {
+      savedLabel.addToThread(thread);
+      logData.labelResult = '成功';
+    } catch (e2) {
+      logData.labelResult = '失敗: ' + e2.message;
+    }
+    try {
+      thread.moveToArchive();
+      logData.archiveResult = '成功';
+    } catch (e3) {
+      logData.archiveResult = '失敗: ' + e3.message;
+    }
 
   } catch (e) {
     logData.status = '失敗';
     logData.errorDetail = e.message;
-    writeProcessLog(logData);
     Logger.log('エラー: ' + e.message + ' | メールID: ' + logData.messageId);
   }
+
+  // 処理ログは最後に1回だけ書く（確定したステータスが必ずM列に入る）
+  writeProcessLog(logData);
 }
 
 // ============================================================
