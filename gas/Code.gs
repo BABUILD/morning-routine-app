@@ -42,8 +42,25 @@ function reprocessJuly() {
 // 共通処理ループ
 // ============================================================
 function runProcess(dateFilter) {
+  // 同時実行を防ぐ（トリガーの重複起動・手動実行の重なりによる二重処理対策）
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log('他の処理が実行中のため中止しました');
+    return;
+  }
+
+  try {
+    runProcessInner(dateFilter);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function runProcessInner(dateFilter) {
   var savedLabel = getOrCreateLabel(CONFIG.SAVED_LABEL_NAME);
   var processedCount = 0;
+  // 処理ログに成功記録があるメールIDは再処理しない（台帳への重複追記を防止）
+  var processedIds = getProcessedMessageIds();
 
   for (var s = 0; s < CONFIG.TARGET_SENDERS.length; s++) {
     if (processedCount >= CONFIG.MAX_EMAILS_PER_RUN) break;
@@ -64,12 +81,40 @@ function runProcess(dateFilter) {
         var message = messages[m];
         if (message.getFrom().indexOf(senderInfo.email) === -1) continue;
         if (senderInfo.subject && message.getSubject().indexOf(senderInfo.subject) === -1) continue;
+        if (processedIds[message.getId()]) {
+          Logger.log('処理済みのためスキップ: ' + message.getId() + ' / ' + message.getSubject());
+          continue;
+        }
 
         processSingleEmail(message, thread, savedLabel, senderInfo);
+        processedIds[message.getId()] = true;
         processedCount++;
       }
     }
   }
+}
+
+// 処理ログから「成功」済みのメールIDを集める
+function getProcessedMessageIds() {
+  var ids = {};
+  try {
+    var sheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID)
+                  .getSheetByName(CONFIG.LOG_SHEET_NAME);
+    if (!sheet) return ids;
+    var last = sheet.getLastRow();
+    if (last < 2) return ids;
+
+    // E列＝メールID、M列＝処理ステータス
+    var values = sheet.getRange(2, 5, last - 1, 9).getValues();
+    values.forEach(function(r) {
+      var messageId = r[0];        // E列
+      var status = r[8];           // M列
+      if (messageId && status === '成功') ids[messageId] = true;
+    });
+  } catch (e) {
+    Logger.log('処理済みIDの取得に失敗: ' + e.message);
+  }
+  return ids;
 }
 
 // ============================================================
