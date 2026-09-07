@@ -246,6 +246,18 @@ function buildWarningBanner(extracted, correctionInfo) {
     );
   }
 
+  // 部数不一致・単価異常などの整合性警告
+  if (extracted.warnings && extracted.warnings.length > 0) {
+    warnings.push(
+      '<div style="background:#ffe0e0;border:3px solid #cc0000;padding:14px;margin:10px 0;font-size:15px;font-family:sans-serif;">' +
+      '<span style="color:#cc0000;font-weight:bold;font-size:18px;">⚠️ 抽出内容に確認が必要な点があります</span><br>' +
+      extracted.warnings.map(function(w) {
+        return '<span style="color:#cc0000;">・' + w + '</span>';
+      }).join('<br>') +
+      '</div>'
+    );
+  }
+
   if (warnings.length === 0) return '';
   return '<div style="margin:0;padding:0;">' + warnings.join('') + '</div>';
 }
@@ -367,34 +379,88 @@ function extractEmailData(message) {
   }
 
   var allRows = [];
+  var warnings = [];   // メール全体の警告（完了メール・LINE・HTMLバナーに表示）
   for (var p = 0; p < headers.length; p++) {
     var header = headers[p];
     var endIdx = p + 1 < headers.length ? headers[p + 1].lineIdx : lines.length;
+    var blockLines = lines.slice(header.lineIdx + 1, endIdx);
 
     // ヘッダー行自身＋明細行の両方を解析対象にする
-    var detailLines = [header.headerLine].concat(lines.slice(header.lineIdx + 1, endIdx));
+    var detailLines = [header.headerLine].concat(blockLines);
     var rows = parseDetailLines(detailLines, header.projectName, header.deliveryDate);
+
+    // 本文に書かれた総部数（例「13500部」）を控えておく
+    var totalMatch = header.headerLine.match(/(\d[\d,，]*)部/);
+    var headerTotal = totalMatch ? parseInt(totalMatch[1].replace(/[,，]/g, ''), 10) : null;
 
     // 明細が取れない場合、ヘッダー行の総部数だけでも拾う
     if (rows.length === 0) {
-      var totalMatch = header.headerLine.match(/(\d[\d,，]*)部/);
       rows.push({
         projectName: header.projectName,
         deliveryDate: header.deliveryDate,
         method: '未抽出',
-        quantity: totalMatch ? totalMatch[1].replace(/[,，]/g, '') : '未抽出',
+        quantity: headerTotal !== null ? String(headerTotal) : '未抽出',
         unitPrice: '未抽出',
-        amount: '未計算'
+        amount: '未計算',
+        note: ''
       });
     }
+
+    // 案件ブロック全体の注記（※で始まる独立行、ヘッダー行の※部分）
+    var blockNotes = collectBlockNotes(header.headerLine, blockLines);
+
+    // 総部数と明細合計の照合（拾い漏れ・誤記の検知）
+    var detailSum = 0;
+    var allNumeric = true;
+    rows.forEach(function(r) {
+      var q = parseInt(r.quantity, 10);
+      if (isNaN(q)) allNumeric = false; else detailSum += q;
+    });
+    var mismatchNote = '';
+    if (headerTotal !== null && allNumeric && rows[0].method !== '未抽出' && detailSum !== headerTotal) {
+      mismatchNote = '⚠️部数不一致（本文' + headerTotal + '部／明細合計' + detailSum + '部）';
+      warnings.push(header.projectName + '：' + mismatchNote);
+    }
+
+    rows.forEach(function(r) {
+      var notes = [];
+      if (blockNotes) notes.push(blockNotes);
+      if (r.note) notes.push(r.note);
+      if (mismatchNote) notes.push(mismatchNote);
+
+      // 単価の異常値（入力ミス・小数点抜け等）を警告
+      var priceNum = parseFloat(r.unitPrice);
+      if (!isNaN(priceNum) && (priceNum < 3 || priceNum > 10)) {
+        var priceNote = '⚠️単価要確認（' + r.unitPrice + '円）';
+        notes.push(priceNote);
+        warnings.push(r.projectName + ' ' + r.method + '：' + priceNote);
+      }
+      r.note = notes.join(' / ');
+    });
+
     allRows = allRows.concat(rows);
   }
 
   return {
     projectName: headers[0].projectName,
     deliveryDate: headers[0].deliveryDate,
-    rows: allRows
+    rows: allRows,
+    warnings: warnings
   };
+}
+
+// ブロック内の「※」注記を集める（ヘッダー行の※以降 ＋ ※で始まる独立行）
+// 明細行に付いた※は parseDetailLines 側でその行の明細に付ける
+function collectBlockNotes(headerLine, blockLines) {
+  var notes = [];
+  var h = headerLine.match(/[※＊][^※＊]*$/);
+  if (h) notes.push(h[0].trim());
+  blockLines.forEach(function(l) {
+    if (/^[※＊]/.test(l) && !/(集合|戸建|ローラー)[\s　]*\d/.test(l)) {
+      notes.push(l.trim());
+    }
+  });
+  return notes.join(' ');
 }
 
 // 日付ヘッダー・市区名＋配布方式の直前に改行を入れる
@@ -407,7 +473,10 @@ function normalizeBodyForParsing(s) {
 
 // ============================================================
 // 診断用：抽出ロジックが最新版かどうかを確認する
-// 実行してログに2案件・4明細が出れば最新版が動いている
+// 期待するログ：
+//   ・明細6行（ワコーレノイエ2行・サンクレイドル2行・ブランズシティ2行）
+//   ・ブランズシティ2行の備考に「※重量特別単価」
+//   ・サンクレイドルに「⚠️部数不一致（本文6000部／明細合計5000部）」
 // ============================================================
 function testExtraction() {
   var sample = [
@@ -422,7 +491,10 @@ function testExtraction() {
     '',
     '7/30〜8/2　サンクレイドル岸和田春木　6000部　在庫あり',
     '泉北郡忠岡町　集合1500部　4.2円/部',
-    '貝塚市　集合4500部　4.2円/部',
+    '貝塚市　集合3500部　4.2円/部',
+    '',
+    '8/6〜8/8　ブランズシティ大津京　28000部　在庫あり',
+    '大津市　集合8500部　6.2円/部　戸建19500部　7.2円/部　※重量特別単価',
     '',
     '沖'
   ].join('\n');
@@ -436,8 +508,10 @@ function testExtraction() {
   Logger.log('抽出行数: ' + result.rows.length);
   result.rows.forEach(function(r, i) {
     Logger.log((i + 1) + '. ' + r.projectName + ' | ' + r.deliveryDate + ' | ' +
-               r.method + ' | ' + r.quantity + '部 | ' + r.unitPrice + '円 | ' + r.amount);
+               r.method + ' | ' + r.quantity + '部 | ' + r.unitPrice + '円 | ' + r.amount +
+               (r.note ? ' | 備考: ' + r.note : ''));
   });
+  Logger.log('警告: ' + (result.warnings.length ? result.warnings.join(' / ') : 'なし'));
 }
 
 // 全角数字・小数点・スラッシュを半角へ
@@ -478,6 +552,10 @@ function parseDetailLines(lines, projectName, deliveryDate) {
       ? projectName.replace(/（[^）]+）$/, '') + '（' + city + '）'
       : projectName;
 
+    // 明細行に付いた注記（例「…5円/部　※重量特別単価」）はその行の明細に付ける
+    var lineNoteMatch = line.match(/[※＊][^※＊]*$/);
+    var lineNote = lineNoteMatch ? lineNoteMatch[0].trim() : '';
+
     methodGlobalRe.lastIndex = 0;
     var match;
     while ((match = methodGlobalRe.exec(line)) !== null) {
@@ -489,7 +567,8 @@ function parseDetailLines(lines, projectName, deliveryDate) {
         method: match[1],
         quantity: qty,
         unitPrice: price,
-        amount: price === '未抽出' ? '未計算' : calcAmt(qty, price)
+        amount: price === '未抽出' ? '未計算' : calcAmt(qty, price),
+        note: lineNote
       });
     }
   }
@@ -517,9 +596,14 @@ function sendCompletionEmail(message, saveResult, extracted, correctionInfo, log
     if (unextracted.length > 0) {
       headerWarnings.push('【⚠️ 未抽出項目あり】' + unextracted.join('、') + ' → 手動確認が必要です');
     }
+    if (extracted.warnings && extracted.warnings.length > 0) {
+      extracted.warnings.forEach(function(w) {
+        headerWarnings.push('【⚠️ 要確認】' + w);
+      });
+    }
 
     var rowsText = extracted.rows.map(function(row, i) {
-      return [
+      var lines = [
         '  【内訳' + (i + 1) + '】',
         '  ・案件名：' + row.projectName,
         '  ・配布日：' + (row.deliveryDate || extracted.deliveryDate),
@@ -527,7 +611,9 @@ function sendCompletionEmail(message, saveResult, extracted, correctionInfo, log
         '  ・部数：' + row.quantity,
         '  ・単価：' + row.unitPrice,
         '  ・金額：' + row.amount
-      ].join('\n');
+      ];
+      if (row.note) lines.push('  ・備考：' + row.note);
+      return lines.join('\n');
     }).join('\n\n');
 
     var attachmentUrlsStr = saveResult.attachmentUrls.length > 0
@@ -601,7 +687,9 @@ function sendLineNotification(message, extracted, correctionInfo, saveResult) {
         projectOrder.push(key);
       }
       var qty = parseInt(row.quantity, 10) || 0;
-      projects[key].methods.push(row.method + '、' + (row.quantity === '未抽出' ? '未抽出' : row.quantity + '部'));
+      var methodLine = row.method + '、' + (row.quantity === '未抽出' ? '未抽出' : row.quantity + '部');
+      if (row.note && /重量|特別単価/.test(row.note)) methodLine += '　※重量特別単価';
+      projects[key].methods.push(methodLine);
       if (!isNaN(qty)) projects[key].total += qty;
     });
 
@@ -616,6 +704,11 @@ function sendLineNotification(message, extracted, correctionInfo, saveResult) {
       lines.push('配布方式ごと：');
       p.methods.forEach(function(m) { lines.push('  ' + m); });
     });
+
+    if (extracted.warnings && extracted.warnings.length > 0) {
+      lines.push('');
+      extracted.warnings.forEach(function(w) { lines.push('⚠️ ' + w); });
+    }
 
     if (saveResult.attachmentUrls.length > 0) {
       lines.push('');
@@ -686,12 +779,16 @@ function writeLedger(message, saveResult, extracted, correctionInfo, senderInfo)
   }
 
   extracted.rows.forEach(function(row) {
+    // 行ごとの注記（※重量特別単価・部数不一致・単価異常）をメール共通の備考に続けて記録
+    var rowNote = noteStr;
+    if (row.note) rowNote = (rowNote ? rowNote + ' / ' : '') + row.note;
+
     sheet.appendRow([
       receivedAt, message.getFrom(), message.getSubject(),
       row.projectName, row.deliveryDate || extracted.deliveryDate, row.method,
       row.quantity, row.unitPrice, row.amount,
       saveResult.htmlFileUrl, attachmentUrlsStr,
-      confirmStatus, billStatus, noteStr
+      confirmStatus, billStatus, rowNote
     ]);
   });
 }

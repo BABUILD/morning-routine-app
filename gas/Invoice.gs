@@ -8,7 +8,8 @@ var INVOICE_CONFIG = {
   TARGET_MONTH: '2026-06',            // 請求対象月（yyyy-MM）
   // 請求月の判定基準：'start'=配布開始日 / 'end'=配布終了日
   // 例）7/30～8/2 の案件は start なら7月分、end なら8月分
-  BILLING_BASIS: 'start',
+  // ※実際の請求書に合わせて配布終了日基準（月またぎ案件は完了月に計上）
+  BILLING_BASIS: 'end',
   COMPANY_NAME: 'P.Post　並松幹太',
   COMPANY_ADDRESS: '大阪市西区南堀江4-4-20',
   BILL_TO: 'ポスティングプロ 御中',
@@ -45,7 +46,9 @@ function createMonthlyInvoice() {
     var method = data[i][5];
     var qty = data[i][6];
     var price = data[i][7];
-    var billStatus = data[i][12];
+    var confirmStatus = String(data[i][11] || '');   // L: 確認ステータス
+    var billStatus = data[i][12];                     // M: 請求書反映ステータス
+    var note = String(data[i][13] || '');             // N: 備考
 
     if (!projectName) continue;
     if (billStatus === '除外') continue;
@@ -61,16 +64,20 @@ function createMonthlyInvoice() {
       method: method,
       qty: qty,
       price: price,
+      note: note,
+      isCorrection: confirmStatus.indexOf('要確認') !== -1,
       receivedAt: (receivedAt instanceof Date) ? receivedAt.getTime() : new Date(receivedAt).getTime()
     });
   }
 
-  // ① 同じ案件＋配布日が複数の受信メールから来ている場合は最新メール由来を採用
+  // ① 同じ案件＋配布日について、後から来たメールが「修正メール」（要確認）の場合だけ
+  //    最新メール由来の行に置き換える。修正でない別メール（追加地区など）は両方残す
   var latestByProject = {};
   candidates.forEach(function(c) {
     var key = invoiceProjectKey(c.projectName) + '|' + c.deliveryDate;
-    if (!latestByProject[key] || c.receivedAt > latestByProject[key]) {
-      latestByProject[key] = c.receivedAt;
+    var cur = latestByProject[key];
+    if (!cur || c.receivedAt > cur.receivedAt) {
+      latestByProject[key] = { receivedAt: c.receivedAt, isCorrection: c.isCorrection };
     }
   });
 
@@ -79,13 +86,20 @@ function createMonthlyInvoice() {
   var rows = [];
   candidates.forEach(function(c) {
     var key = invoiceProjectKey(c.projectName) + '|' + c.deliveryDate;
-    if (c.receivedAt !== latestByProject[key]) return;
+    var latest = latestByProject[key];
+    if (latest.isCorrection && c.receivedAt !== latest.receivedAt) return;
 
     var rowKey = [String(c.projectName).replace(/[\s　]+/g, ''), c.deliveryDate,
                   c.method, c.qty, c.price].join('|');
     if (seenRows[rowKey]) return;
     seenRows[rowKey] = true;
-    rows.push([c.projectName, c.deliveryDate, c.method, c.qty, c.price]);
+
+    // 請求書の備考列に出す内容：※注記と⚠️警告のみ（修正メール理由などは省く）
+    var invoiceNote = extractInvoiceNote(c.note);
+    if (isNaN(parseFloat(c.qty)) || isNaN(parseFloat(c.price))) {
+      invoiceNote = (invoiceNote ? invoiceNote + ' ' : '') + '⚠️数量/単価未確定';
+    }
+    rows.push([c.projectName, c.deliveryDate, c.method, c.qty, c.price, invoiceNote]);
   });
 
   if (rows.length === 0) {
@@ -186,7 +200,7 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   sheet.getRange('G8:G10').setNumberFormat('#,##0');
 
   var headerRow = 12;
-  var headers = ['No.', '案件名', '配布日', '配布方法', '数量（部）', '単価', '金額', '累計'];
+  var headers = ['No.', '案件名', '配布日', '配布方法', '数量（部）', '単価', '金額', '累計', '備考'];
   sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers])
        .setFontWeight('bold').setBackground(C.COLOR_HEADER_BG);
 
@@ -194,6 +208,11 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
     return [i + 1, r[0], r[1], r[2], r[3], r[4]];
   });
   sheet.getRange(headerRow + 1, 1, detailValues.length, 6).setValues(detailValues);
+
+  // 備考列（I）：※重量特別単価 などの注記と ⚠️ 警告
+  var noteValues = rows.map(function(r) { return [r[5] || '']; });
+  sheet.getRange(headerRow + 1, 9, noteValues.length, 1).setValues(noteValues)
+       .setFontSize(9).setFontColor('#cc0000');
 
   var amountFormulas = rows.map(function(r, i) {
     var rowNum = headerRow + 1 + i;
@@ -233,7 +252,8 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   sheet.setColumnWidth(6, 90);
   sheet.setColumnWidth(7, 100);
   sheet.setColumnWidth(8, 100);
-  sheet.getRange(headerRow, 1, detailValues.length + 1, 8).setBorder(true, true, true, true, true, true);
+  sheet.setColumnWidth(9, 150);  // 備考
+  sheet.getRange(headerRow, 1, detailValues.length + 1, 9).setBorder(true, true, true, true, true, true);
   sheet.getRange(headerRow + 1, 5, detailValues.length, 3).setNumberFormat('#,##0.##');
   sheet.getRange(headerRow + 1, 7, detailValues.length, 1).setNumberFormat('#,##0');
 }
@@ -241,6 +261,17 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
 // 案件名から市区名と空白を除いた比較用キー
 function invoiceProjectKey(name) {
   return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
+}
+
+// 台帳の備考から請求書に載せる部分だけを抜き出す
+// （※で始まる注記と ⚠️ 警告。修正メール理由などの運用メモは除外）
+function extractInvoiceNote(note) {
+  if (!note) return '';
+  var parts = String(note).split(/\s*\/\s*/);
+  var keep = parts.filter(function(p) {
+    return /^[※＊]/.test(p) || /^⚠️(部数不一致|単価要確認|未抽出)/.test(p);
+  });
+  return keep.join(' ');
 }
 
 // 配布日文字列（例「7/30～8/2」「8/1～8/2」）から請求月判定用のDateを返す

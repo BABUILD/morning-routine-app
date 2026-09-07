@@ -39,6 +39,7 @@ function createCompletionReportDraft() {
     var method = data[i][5];       // F: 配布方式
     var qty = data[i][6];          // G: 部数
     var price = data[i][7];        // H: 単価
+    var confirmStatus = String(data[i][11] || '');  // L: 確認ステータス
     var reported = data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]; // O列
 
     if (!projectName || projectName === '未抽出') continue;
@@ -57,6 +58,7 @@ function createCompletionReportDraft() {
       qty: qty,
       price: price,
       endDate: endDate,
+      isCorrection: confirmStatus.indexOf('要確認') !== -1,
       receivedAt: (receivedAt instanceof Date) ? receivedAt.getTime() : new Date(receivedAt).getTime()
     });
   }
@@ -66,13 +68,14 @@ function createCompletionReportDraft() {
     return;
   }
 
-  // ① 同じ案件＋配布日の行が複数の受信メールから来ている場合（修正メール等）、
-  //    最新の受信メール由来の行だけを採用する
+  // ① 同じ案件＋配布日について、後から来たメールが「修正メール」（要確認）の場合だけ
+  //    最新メール由来の行に置き換える。修正でない別メール（追加地区など）は両方残す
   var latestByProject = {};
   targets.forEach(function(t) {
     var key = projectKey(t.projectName) + '|' + t.deliveryDate;
-    if (!latestByProject[key] || t.receivedAt > latestByProject[key]) {
-      latestByProject[key] = t.receivedAt;
+    var cur = latestByProject[key];
+    if (!cur || t.receivedAt > cur.receivedAt) {
+      latestByProject[key] = { receivedAt: t.receivedAt, isCorrection: t.isCorrection };
     }
   });
 
@@ -82,7 +85,8 @@ function createCompletionReportDraft() {
   var countTargets = [];
   targets.forEach(function(t) {
     var key = projectKey(t.projectName) + '|' + t.deliveryDate;
-    if (t.receivedAt !== latestByProject[key]) return;
+    var latest = latestByProject[key];
+    if (latest.isCorrection && t.receivedAt !== latest.receivedAt) return;
 
     var rowKey = [String(t.projectName).replace(/[\s　]+/g, ''), t.deliveryDate,
                   t.method, t.qty, t.price].join('|');
