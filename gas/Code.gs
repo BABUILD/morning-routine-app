@@ -374,7 +374,8 @@ function extractEmailData(message) {
     return {
       projectName: '未抽出',
       deliveryDate: '未抽出',
-      rows: [{ projectName: '未抽出', deliveryDate: '未抽出', method: '未抽出', quantity: '未抽出', unitPrice: '未抽出', amount: '未計算' }]
+      rows: [{ projectName: '未抽出', deliveryDate: '未抽出', method: '未抽出', quantity: '未抽出', unitPrice: '未抽出', amount: '未計算', note: '' }],
+      warnings: []
     };
   }
 

@@ -152,9 +152,9 @@ function createCompletionReportDraft() {
     sheet.getRange(t.rowIdx, REPORT_CONFIG.REPORT_STATUS_COL).setValue(stamp);
   });
 
-  sendDraftNotification(subject, draftBody, dateOrder, targets.length);
+  sendDraftNotification(subject, draftBody, dateOrder, countTargets.length);
 
-  Logger.log('完了報告の下書きを作成しました：' + targets.length + '行');
+  Logger.log('完了報告の下書きを作成しました：' + countTargets.length + '行（重複除外前 ' + targets.length + '行）');
 }
 
 // ============================================================
