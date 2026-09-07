@@ -289,13 +289,20 @@ function detectCorrection(message) {
     return { isCorrection: true, reason: '返信メール（RE:）のため修正・追加の可能性あり' };
   }
 
-  if (/変更|修正|訂正|取消|キャンセル|削除|再送/.test(subject)) {
-    return { isCorrection: true, reason: '件名に変更・修正ワードを含む' };
+  if (/変更|修正|訂正|取消|キャンセル|削除|再送|追加|差し?替/.test(subject)) {
+    return { isCorrection: true, reason: '件名に変更・修正・追加ワードを含む' };
   }
 
-  var bodyTop = body.substring(0, 300);
-  if (/なくなりました|変更です|変更になりました|修正です|訂正です|取り消し|キャンセル|誤りがありました|間違いがありました/.test(bodyTop)) {
+  // 本文冒頭（挨拶〜依頼文）に修正・差し替え・追加を示す記述があるか
+  var bodyTop = body.substring(0, 500);
+  if (/破棄|差し?替え|前回(送っ|お送り|送付)/.test(bodyTop)) {
+    return { isCorrection: true, reason: '本文に「前回分の破棄・差し替え」の記述あり → 前回分の台帳行を削除してください' };
+  }
+  if (/なくなりました|変更(です|になりました|しました|しております)|修正(です|しました|しております|した)|訂正(です|しました)|取り消し|キャンセル|誤りがありました|間違いがありました/.test(bodyTop)) {
     return { isCorrection: true, reason: '本文に変更・修正を示す記述を検知' };
+  }
+  if (/追加の(宅配|配布|依頼)|追加依頼|追加で/.test(bodyTop)) {
+    return { isCorrection: true, reason: '本文に「追加依頼」の記述あり → 既存案件との重複がないか確認してください' };
   }
 
   return { isCorrection: false, reason: '' };
@@ -453,15 +460,24 @@ function extractEmailData(message) {
 // ブロック内の「※」注記を集める（ヘッダー行の※以降 ＋ ※で始まる独立行）
 // 明細行に付いた※は parseDetailLines 側でその行の明細に付ける
 function collectBlockNotes(headerLine, blockLines) {
-  var notes = [];
-  var h = headerLine.match(/[※＊][^※＊]*$/);
-  if (h) notes.push(h[0].trim());
+  var notes = splitNotes(headerLine);
   blockLines.forEach(function(l) {
     if (/^[※＊]/.test(l) && !/(集合|戸建|ローラー)[\s　]*\d/.test(l)) {
-      notes.push(l.trim());
+      notes = notes.concat(splitNotes(l));
     }
   });
-  return notes.join(' ');
+  return notes.join(' / ');
+}
+
+// 1行に含まれる「※…」注記を個別に取り出す
+// 例「※重量があるので単価上げます。※請求書に特別単価とご記入ください」→ 2件
+function splitNotes(text) {
+  var idx = String(text).search(/[※＊]/);
+  if (idx === -1) return [];
+  return String(text).substring(idx)
+    .split(/(?=[※＊])/)
+    .map(function(s) { return s.trim(); })
+    .filter(function(s) { return s.length > 1; });
 }
 
 // 日付ヘッダー・市区名＋配布方式の直前に改行を入れる
@@ -473,31 +489,36 @@ function normalizeBodyForParsing(s) {
 }
 
 // ============================================================
-// 診断用：抽出ロジックが最新版かどうかを確認する
+// 診断用：抽出ロジックが最新版かどうかを確認する（実物メールを元にしたサンプル）
 // 期待するログ：
-//   ・明細6行（ワコーレノイエ2行・サンクレイドル2行・ブランズシティ2行）
-//   ・ブランズシティ2行の備考に「※重量特別単価」
-//   ・サンクレイドルに「⚠️部数不一致（本文6000部／明細合計5000部）」
+//   ・明細6行（サンクレイドル1行・ワコーレシティ2行・ジェイグランシティ3行）
+//   ・サンクレイドルの備考に※注記が3件（重量／特別単価／きっちり配布）
+//   ・ジェイグランシティの3行目「戸建4500部」が（加古川市）になっている
+//   ・警告なし（総部数と明細合計が全て一致）
 // ============================================================
 function testExtraction() {
   var sample = [
     '並松様',
     '',
     'いつもお世話になっております。',
-    '宅配依頼です。',
     '',
-    '7/30〜7/31　ワコーレノイエ垂水歌敷山　13500部　在庫あり',
-    '垂水区　集合6600部　4円/部　戸建6900部　5円/部',
-    '禁止リストがありますのでスタッフ間で共有願います。',
+    '8/27～8/29　サンクレイドル岸和田春木　泉大津市・忠岡町　10000部　在庫有ります',
+    '集合10000部　4.5円/部',
+    '※チラシの重量が有りますので少し単価上げます。※請求書に特別単価とご記入ください',
+    '※非常にうるさいクライアントですのできっちり配布でお願いします。',
     '',
-    '7/30〜8/2　サンクレイドル岸和田春木　6000部　在庫あり',
-    '泉北郡忠岡町　集合1500部　4.2円/部',
-    '貝塚市　集合3500部　4.2円/部',
+    '8/27～8/28　ワコーレシティ西鈴蘭台駅前　神戸市北区　10000部　在庫有ります',
+    '集合4000部　4円/部',
+    '戸建6000部　5円/部',
     '',
-    '8/6〜8/8　ブランズシティ大津京　28000部　在庫あり',
-    '大津市　集合8500部　6.2円/部　戸建19500部　7.2円/部　※重量特別単価',
+    '8/27～8/28　ジェイグランシティ西明石タワーウエスト　明石市・加古川市　9500部　在庫有ります',
+    '明石市：集合1000部　5円/部',
+    '加古川市：集合4000部　6円/部',
+    '　　　　　戸建4500部　6円/部',
     '',
-    '沖'
+    '宜しくお願い致します。',
+    '',
+    'ポスティング・プロ　橋本'
   ].join('\n');
 
   var fakeMessage = {
@@ -513,6 +534,28 @@ function testExtraction() {
                (r.note ? ' | 備考: ' + r.note : ''));
   });
   Logger.log('警告: ' + (result.warnings.length ? result.warnings.join(' / ') : 'なし'));
+}
+
+// ============================================================
+// 診断用：修正メール検知の確認
+// 期待するログ：3件とも isCorrection = true
+// ============================================================
+function testCorrectionDetection() {
+  var cases = [
+    { subject: '26.8.31～9.9　宅配依頼',
+      body: '並松様\n \nいつもお世話になっております。\n中楽坊の追加の宅配依頼と前回送りました。\n豊中市の分も若干修正しましたのでご確認お願いします。\n前回送った宅配依頼は破棄してください。\n' },
+    { subject: 'RE: 26.6.6～6.8　宅配依頼', body: '宅配依頼です。' },
+    { subject: '26.2.28～3.2　宅配依頼', body: '昨日お伝えしました。\nジオ神戸三宮の変更です。\n東灘区はなくなりました\n' }
+  ];
+  cases.forEach(function(c, i) {
+    var fake = {
+      getSubject: function() { return c.subject; },
+      getPlainBody: function() { return c.body; },
+      getBody: function() { return c.body; }
+    };
+    var r = detectCorrection(fake);
+    Logger.log((i + 1) + '. ' + c.subject + ' → ' + (r.isCorrection ? '検知' : '未検知') + (r.reason ? '（' + r.reason + '）' : ''));
+  });
 }
 
 // 全角数字・小数点・スラッシュを半角へ
@@ -543,19 +586,24 @@ function parseDetailLines(lines, projectName, deliveryDate) {
   // 単価は任意（書かれていない案件もある）
   var methodGlobalRe = /(集合|戸建|ローラー)[\s　]*(\d[\d,，]*)部(?:[^\d集戸ロ\n]*([\d.]+)円)?/g;
 
+  // 直前の明細行の地区を、地区なしの継続行（字下げ行）に引き継ぐ
+  //   加古川市：集合4000部　6円/部
+  //   　　　　　戸建4500部　6円/部   ← この行は加古川市扱い
+  var lastCity = null;
+
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
     if (!/(集合|戸建|ローラー)/.test(line)) continue;
 
     var cityMatch = line.match(cityRe);
-    var city = cityMatch ? cityMatch[1].trim() : null;
+    var city = cityMatch ? cityMatch[1].trim() : lastCity;
+    if (cityMatch) lastCity = city;
     var rowProjectName = city
       ? projectName.replace(/（[^）]+）$/, '') + '（' + city + '）'
       : projectName;
 
     // 明細行に付いた注記（例「…5円/部　※重量特別単価」）はその行の明細に付ける
-    var lineNoteMatch = line.match(/[※＊][^※＊]*$/);
-    var lineNote = lineNoteMatch ? lineNoteMatch[0].trim() : '';
+    var lineNote = splitNotes(line).join(' / ');
 
     methodGlobalRe.lastIndex = 0;
     var match;
@@ -683,6 +731,7 @@ function sendLineNotification(message, extracted, correctionInfo, saveResult) {
         projects[key] = {
           deliveryDate: row.deliveryDate || extracted.deliveryDate,
           methods: [],
+          notes: [],
           total: 0
         };
         projectOrder.push(key);
@@ -692,6 +741,15 @@ function sendLineNotification(message, extracted, correctionInfo, saveResult) {
       if (row.note && /重量|特別単価/.test(row.note)) methodLine += '　※重量特別単価';
       projects[key].methods.push(methodLine);
       if (!isNaN(qty)) projects[key].total += qty;
+
+      // 先方からの※注記（配布指示など）は内部向けのLINEには全文載せる
+      if (row.note) {
+        row.note.split(/\s*\/\s*/).forEach(function(n) {
+          if (/^[※＊]/.test(n) && projects[key].notes.indexOf(n) === -1) {
+            projects[key].notes.push(n);
+          }
+        });
+      }
     });
 
     var lines = [prefix];
@@ -704,6 +762,7 @@ function sendLineNotification(message, extracted, correctionInfo, saveResult) {
       lines.push('部数：' + (p.total > 0 ? p.total + '部' : '未抽出'));
       lines.push('配布方式ごと：');
       p.methods.forEach(function(m) { lines.push('  ' + m); });
+      p.notes.forEach(function(n) { lines.push('  ' + n); });
     });
 
     if (extracted.warnings && extracted.warnings.length > 0) {

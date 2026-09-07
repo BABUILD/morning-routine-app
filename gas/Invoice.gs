@@ -25,7 +25,10 @@ var INVOICE_CONFIG = {
   LOGO_NAME_KEYWORD: 'logo',
   STAMP_NAME_KEYWORD: 'stamp',
   COLOR_HEADER_BG: '#fce5cd',
-  COLOR_CUMULATIVE: '#1155cc'
+  COLOR_CUMULATIVE: '#1155cc',
+  // 先方から「請求書に特別単価と記入」等の指示があった行に付ける固定文言
+  // （メールの※本文はそのまま載せず、必ずこの文言に置き換える）
+  SPECIAL_PRICE_LABEL: '※重量特別単価'
 };
 
 function createMonthlyInvoice() {
@@ -263,15 +266,24 @@ function invoiceProjectKey(name) {
   return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
 }
 
-// 台帳の備考から請求書に載せる部分だけを抜き出す
-// （※で始まる注記と ⚠️ 警告。修正メール理由などの運用メモは除外）
+// 台帳の備考から請求書に載せる部分だけを作る
+//   ・「特別単価」「重量」に触れた※注記 → 固定文言 SPECIAL_PRICE_LABEL に置き換え
+//   ・⚠️ 警告（部数不一致・単価要確認・未抽出）→ そのまま（人の確認を促す）
+//   ・それ以外の※注記（配布指示・先方の内輪コメント等）→ 請求書には載せない
 function extractInvoiceNote(note) {
   if (!note) return '';
   var parts = String(note).split(/\s*\/\s*/);
-  var keep = parts.filter(function(p) {
-    return /^[※＊]/.test(p) || /^⚠️(部数不一致|単価要確認|未抽出)/.test(p);
+  var out = [];
+  var special = false;
+  parts.forEach(function(p) {
+    if (/^[※＊]/.test(p)) {
+      if (/特別単価|重量/.test(p)) special = true;
+      return;
+    }
+    if (/^⚠️(部数不一致|単価要確認|未抽出)/.test(p)) out.push(p);
   });
-  return keep.join(' ');
+  if (special) out.unshift(INVOICE_CONFIG.SPECIAL_PRICE_LABEL);
+  return out.join(' ');
 }
 
 // 配布日文字列（例「7/30～8/2」「8/1～8/2」）から請求月判定用のDateを返す
