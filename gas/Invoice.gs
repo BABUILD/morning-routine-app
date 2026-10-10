@@ -50,11 +50,12 @@ function createMonthlyInvoice() {
     var qty = data[i][6];
     var price = data[i][7];
     var confirmStatus = String(data[i][11] || '');   // L: 確認ステータス
-    var billStatus = data[i][12];                     // M: 請求書反映ステータス
+    var billStatus = String(data[i][12] || '');       // M: 請求書反映ステータス
     var note = String(data[i][13] || '');             // N: 備考
 
     if (!projectName) continue;
-    if (billStatus === '除外') continue;
+    // 別請求の取引先、修正メールで差し替えられた旧行はスキップ
+    if (billStatus.indexOf('除外') === 0) continue;
 
     // 配布日を基準に請求月を判定する（受信日ではない）
     var d = parseBillingDate(deliveryDate, receivedAt);
@@ -261,9 +262,12 @@ function buildInvoiceSheet(sheet, rows, year, mon) {
   sheet.getRange(headerRow + 1, 7, detailValues.length, 1).setNumberFormat('#,##0');
 }
 
-// 案件名から市区名と空白を除いた比較用キー
+// 案件名から市区名（…）・予備日表記・空白を除いた比較用キー
 function invoiceProjectKey(name) {
-  return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
+  return String(name)
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/[※＊]\s*\d{1,2}\s*(?:予備日)?/g, '')
+    .replace(/[\s　]+/g, '');
 }
 
 // 台帳の備考から請求書に載せる部分だけを作る

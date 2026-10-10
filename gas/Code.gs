@@ -19,6 +19,8 @@ var CONFIG = {
   SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1Yb3MSm6q793gLlCHsPtutnd-LrvY4EGoxTuhGvqtUqE/edit',
   MAX_EMAILS_PER_RUN: 8,
   LOOKBACK_DAYS: 3,
+  // 処理ログに記録するコード版。古いプロジェクトが並行稼働していないかの判別に使う
+  CODE_VERSION: '2026.10.10',
   LINE_CHANNEL_TOKEN: 'IJmmPEPsYCBjzsZvrfRZJTrZlCPIqA83QL/5mBNsOzFePxCPO63i1RDjC1nLXvLrpKg1Fm+XlmXr8ckBMlHBkkpBO+kdajBkjVFSMKhSdZewiv/dFFMpDs67AJVjKQqrijHUGvGV9OcuG+5GbVwwSQdB04t89/1O/w1cDnyilFU=',
   LINE_USER_ID: 'U56e0ed67aaa35a7aaf28af831431b025'
 };
@@ -338,11 +340,35 @@ function saveMetadata(folder, message, saveResult, extracted, correctionInfo) {
 // 市区名プレフィックス（スペース/コロン/直結）に対応
 // ============================================================
 function extractEmailData(message) {
-  var body = message.getPlainBody() || stripHtmlTags(message.getBody());
+  var full = message.getPlainBody() || stripHtmlTags(message.getBody());
 
-  var quoteCutIdx = body.search(/\nFrom:\s/);
-  if (quoteCutIdx > 0) body = body.substring(0, quoteCutIdx);
+  // 引用部分（From: 以下）を切り分ける
+  var quoteCutIdx = full.search(/\nFrom:\s/);
+  var top = quoteCutIdx > 0 ? full.substring(0, quoteCutIdx) : full;
+  var quoted = '';
+  if (quoteCutIdx > 0) {
+    quoted = full.substring(quoteCutIdx);
+    // 多段引用の場合は直近1通分だけを対象にする
+    var next = quoted.substring(1).search(/\nFrom:\s/);
+    if (next > 0) quoted = quoted.substring(0, next + 1);
+  }
 
+  var result = parseBodyText(top);
+
+  // 本文上部に案件情報がない返信メール（「下記をご確認ください」＋引用内を書き換えて送る形式）は
+  // 引用部分から抽出する
+  if (result.projectName === '未抽出' && quoted) {
+    var fromQuote = parseBodyText(quoted);
+    if (fromQuote.projectName !== '未抽出') {
+      fromQuote.warnings.unshift('本文上部に案件情報がなく、引用部分（From:以下）から抽出しました。引用内の数値が修正後の値か確認してください');
+      fromQuote.fromQuote = true;
+      return fromQuote;
+    }
+  }
+  return result;
+}
+
+function parseBodyText(body) {
   // 全角数字・記号を半角に正規化してから解析する
   body = normalizeNumbers(body);
   // 本文が1行に潰れている場合でも解析できるよう改行を補う
@@ -416,6 +442,12 @@ function extractEmailData(message) {
 
     // 案件ブロック全体の注記（※で始まる独立行、ヘッダー行の※部分）
     var blockNotes = collectBlockNotes(header.headerLine, blockLines);
+    // 日付直後の予備日表記「10/10～10/13（14）」「7/14～7/15※16」を注記として残す
+    var reserve = header.headerLine.match(/\d{1,2}\/\d{1,2}\s*(?:[（(]\s*(\d{1,2})\s*[）)]|[※＊]\s*(\d{1,2}))/);
+    if (reserve) {
+      var reserveNote = '※予備日：' + (reserve[1] || reserve[2]) + '日';
+      blockNotes = blockNotes ? blockNotes + ' / ' + reserveNote : reserveNote;
+    }
 
     // 総部数と明細合計の照合（拾い漏れ・誤記の検知）
     var detailSum = 0;
@@ -489,36 +521,44 @@ function normalizeBodyForParsing(s) {
 }
 
 // ============================================================
-// 診断用：抽出ロジックが最新版かどうかを確認する（実物メールを元にしたサンプル）
+// 診断用：抽出ロジックが最新版かどうかを確認する（10/1の実物メールを元にしたサンプル）
 // 期待するログ：
-//   ・明細6行（サンクレイドル1行・ワコーレシティ2行・ジェイグランシティ3行）
-//   ・サンクレイドルの備考に※注記が3件（重量／特別単価／きっちり配布）
-//   ・ジェイグランシティの3行目「戸建4500部」が（加古川市）になっている
-//   ・警告なし（総部数と明細合計が全て一致）
+//   ・明細10行・4案件（ブランズシティ4行・ウエリス2行・ファイン2行・リアラス2行）
+//   ・ブランズシティの2行目が（大津市）、4行目が（山科区）（字下げ行の地区引き継ぎ）
+//   ・リアラスの配布日が 10/2～10/3
+//   ・最後の案件名が「ブランズシティ大津京（大津市）」で「（14）」が付いていない
+//   ・警告なし
 // ============================================================
 function testExtraction() {
   var sample = [
     '並松様',
-    '',
     'いつもお世話になっております。',
-    '',
-    '8/27～8/29　サンクレイドル岸和田春木　泉大津市・忠岡町　10000部　在庫有ります',
-    '集合10000部　4.5円/部',
-    '※チラシの重量が有りますので少し単価上げます。※請求書に特別単価とご記入ください',
-    '※非常にうるさいクライアントですのできっちり配布でお願いします。',
-    '',
-    '8/27～8/28　ワコーレシティ西鈴蘭台駅前　神戸市北区　10000部　在庫有ります',
-    '集合4000部　4円/部',
-    '戸建6000部　5円/部',
-    '',
-    '8/27～8/28　ジェイグランシティ西明石タワーウエスト　明石市・加古川市　9500部　在庫有ります',
-    '明石市：集合1000部　5円/部',
-    '加古川市：集合4000部　6円/部',
-    '　　　　　戸建4500部　6円/部',
-    '',
-    '宜しくお願い致します。',
-    '',
-    'ポスティング・プロ　橋本'
+    ' ',
+    '10/1～10/3　ブランズシティ大津京　大津市・京都市山科区　24000部　在庫有ります',
+    '大津市：集合8000部　6円/部',
+    '戸建13100部　7円/部',
+    '山科区：集合700部　5円/部',
+    '　　　　戸建2200部　6円/部',
+    ' ',
+    '10/1～10/3　ウエリスタワー和歌山城北　和歌山市　10000部　在庫有ります',
+    '集合4000部　6.5円/部',
+    '戸建6000部　6.5円/部',
+    ' ',
+    '10/1～10/3　ファインレジデンス京都五条通　京都市右京区　12000部　在庫有ります',
+    '集合6000部　5円/部',
+    '戸建6000部　6円/部',
+    ' ',
+    '10/2～10/3　リアラス明石西新町　明石市・神戸市西区　17000部　10/1（金）入荷予定',
+    '明石市：集合15000部　5円/部',
+    '神戸市西区：集合2000部　4円/部',
+    ' ',
+    '10/10～10/13（14）　ブランズシティ大津京　大津市・山科区　25000部　10/9（金）入荷予定',
+    '大津市：集合8000部　6.2円/部',
+    '　　　　戸建13000部　7.2円/部',
+    '山科区：集合800部　5.2円/部',
+    '　　　　戸建3200部　6.2円/部',
+    ' ',
+    '宜しくお願い致します。'
   ].join('\n');
 
   var fakeMessage = {
@@ -531,6 +571,64 @@ function testExtraction() {
   result.rows.forEach(function(r, i) {
     Logger.log((i + 1) + '. ' + r.projectName + ' | ' + r.deliveryDate + ' | ' +
                r.method + ' | ' + r.quantity + '部 | ' + r.unitPrice + '円 | ' + r.amount +
+               (r.note ? ' | 備考: ' + r.note : ''));
+  });
+  Logger.log('警告: ' + (result.warnings.length ? result.warnings.join(' / ') : 'なし'));
+}
+
+// ============================================================
+// 診断用：修正メール（引用内を書き換えて送る形式）の抽出確認
+// 期待するログ：
+//   ・修正メールとして検知
+//   ・引用部分から4案件が抽出され、ブランズシティの単価が 6.2 / 7.2 / 5.2 / 6.2
+//   ・警告に「引用部分から抽出」
+// ============================================================
+function testCorrectionEmail() {
+  var sample = [
+    '並松様',
+    'いつもお世話になっております。',
+    ' ',
+    'お伝えしたようにブランズシティ大津京のチラシは',
+    '少し重たいチラシでしたので、単価を変更します。',
+    '下記をご確認ください。',
+    ' ',
+    '橋本',
+    ' ',
+    'From: hashimoto@milaie.com <hashimoto@milaie.com>',
+    'Sent: Thursday, October 8, 2026 2:33 PM',
+    "To: 'P.Postピーポスト' <ppost2021@gmail.com>",
+    'Subject: 26.10.9～10.17　宅配依頼',
+    ' ',
+    '並松様',
+    'いつもお世話になっております。',
+    ' ',
+    '10/9～10/12　ジェイグラン羽衣　堺市西区　12000部　本日入荷予定',
+    '集合5000部　4円/部',
+    '戸建7000部　5円/部',
+    ' ',
+    '10/10～10/13（14）　ブランズシティ大津京　大津市・山科区　25000部　10/9（金）入荷予定',
+    '大津市：集合8000部　6.2円/部',
+    '　　　　戸建13000部　7.2円/部',
+    '山科区：集合800部　5.2円/部',
+    '　　　　戸建3200部　6.2円/部',
+    '※チラシが高重量の場合単価を変更します。（その際はメールを再送します。）',
+    ' ',
+    '宜しくお願い致します。'
+  ].join('\n');
+
+  var fakeMessage = {
+    getSubject: function() { return 'RE: 26.10.9～10.17　宅配依頼'; },
+    getPlainBody: function() { return sample; },
+    getBody: function() { return sample; }
+  };
+
+  var c = detectCorrection(fakeMessage);
+  Logger.log('修正メール判定: ' + (c.isCorrection ? '検知' : '未検知') + (c.reason ? '（' + c.reason + '）' : ''));
+  var result = extractEmailData(fakeMessage);
+  Logger.log('抽出行数: ' + result.rows.length + (result.fromQuote ? '（引用部分から）' : ''));
+  result.rows.forEach(function(r, i) {
+    Logger.log((i + 1) + '. ' + r.projectName + ' | ' + r.deliveryDate + ' | ' +
+               r.method + ' | ' + r.quantity + '部 | ' + r.unitPrice + '円' +
                (r.note ? ' | 備考: ' + r.note : ''));
   });
   Logger.log('警告: ' + (result.warnings.length ? result.warnings.join(' / ') : 'なし'));
@@ -567,6 +665,8 @@ function normalizeNumbers(s) {
 
 function parseProjectName(line, dateRe, dateKanjiRe) {
   var rest = line.replace(dateRe, '').replace(dateKanjiRe, '').trim();
+  // 日付直後の予備日表記「（14）」「※16」「※16予備日」を案件名に含めない
+  rest = rest.replace(/^(?:[（(]\s*\d{1,2}\s*[）)]|[※＊]\s*\d{1,2}\s*(?:予備日?)?)+[\s　]*/, '').trim();
   rest = rest.replace(/[\s　]\d[\d,，]*部.*$/, '').trim();
   rest = rest.replace(/[\s　](在庫|受け渡し|受渡).*$/i, '').trim();
   var parts = rest.split(/[\s　]+/).filter(function(p) { return p.length > 0; });
@@ -808,9 +908,11 @@ function writeProcessLog(logData) {
   var sheet = ss.getSheetByName(CONFIG.LOG_SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.LOG_SHEET_NAME);
-    sheet.appendRow(['処理日時','受信日時','送信元','件名','メールID','スレッドID','保存フォルダURL','HTMLファイルURL','添付ファイルURL','完了メール送信結果','Gmailラベル付与結果','アーカイブ結果','処理ステータス','エラー内容']);
+    sheet.appendRow(['処理日時','受信日時','送信元','件名','メールID','スレッドID','保存フォルダURL','HTMLファイルURL','添付ファイルURL','完了メール送信結果','Gmailラベル付与結果','アーカイブ結果','処理ステータス','エラー内容','コード版']);
   }
-  sheet.appendRow([logData.processedAt,logData.receivedAt,logData.sender,logData.subject,logData.messageId,logData.threadId,logData.folderUrl,logData.htmlFileUrl,logData.attachmentUrls,logData.notifyResult,logData.labelResult,logData.archiveResult,logData.status,logData.errorDetail]);
+  // O列「コード版」：どのコードが処理したかを残す（別プロジェクトの旧コード混在を検知するため）
+  if (sheet.getRange(1, 15).getValue() === '') sheet.getRange(1, 15).setValue('コード版');
+  sheet.appendRow([logData.processedAt,logData.receivedAt,logData.sender,logData.subject,logData.messageId,logData.threadId,logData.folderUrl,logData.htmlFileUrl,logData.attachmentUrls,logData.notifyResult,logData.labelResult,logData.archiveResult,logData.status,logData.errorDetail,CONFIG.CODE_VERSION]);
 }
 
 function writeLedger(message, saveResult, extracted, correctionInfo, senderInfo) {
@@ -838,6 +940,18 @@ function writeLedger(message, saveResult, extracted, correctionInfo, senderInfo)
     noteStr = (noteStr ? noteStr + ' / ' : '') + '別請求（' + extractEmailAddress(message.getFrom()) + '）';
   }
 
+  // 修正メールで有効な明細が取れた場合、同じ案件＋配布日の旧行を「除外（差し替え）」にする
+  // → 台帳上で新旧が並ばず、請求書・完了報告にも旧行が混ざらない
+  if (correctionInfo.isCorrection) {
+    var superseded = supersedeOldLedgerRows(sheet, extracted.rows, message.getDate());
+    if (superseded > 0) {
+      noteStr = (noteStr ? noteStr + ' / ' : '') + '旧行' + superseded + '件を差し替え';
+    }
+  }
+  if (extracted.fromQuote) {
+    noteStr = (noteStr ? noteStr + ' / ' : '') + '引用部分から抽出';
+  }
+
   extracted.rows.forEach(function(row) {
     // 行ごとの注記（※重量特別単価・部数不一致・単価異常）をメール共通の備考に続けて記録
     var rowNote = noteStr;
@@ -856,6 +970,49 @@ function writeLedger(message, saveResult, extracted, correctionInfo, senderInfo)
 // ============================================================
 // ユーティリティ
 // ============================================================
+// 修正メールの明細と同じ案件＋配布日を持つ旧行を「除外（修正メールで差し替え）」にする
+// 対象：修正メールより前に受信した行のみ（同じメールや、さらに新しい修正は触らない）
+function supersedeOldLedgerRows(sheet, newRows, receivedDate) {
+  var keys = {};
+  newRows.forEach(function(r) {
+    if (r.method === '未抽出' || r.projectName === '未抽出') return;
+    keys[ledgerProjectKey(r.projectName) + '|' + r.deliveryDate] = true;
+  });
+  if (Object.keys(keys).length === 0) return 0;
+
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  var data = sheet.getRange(2, 1, last - 1, 14).getValues();
+  var newTime = receivedDate.getTime();
+  var stamp = '差し替え元：' + formatDateJST(receivedDate) + ' 受信の修正メール';
+  var count = 0;
+
+  for (var i = 0; i < data.length; i++) {
+    var rowKey = ledgerProjectKey(data[i][3]) + '|' + String(data[i][4] || '');
+    if (!keys[rowKey]) continue;
+    if (String(data[i][12] || '').indexOf('除外') === 0) continue;
+
+    var t = (data[i][0] instanceof Date) ? data[i][0].getTime() : new Date(data[i][0]).getTime();
+    if (isNaN(t) || t >= newTime) continue;
+
+    var rowNum = i + 2;
+    sheet.getRange(rowNum, 12).setValue('旧版');
+    sheet.getRange(rowNum, 13).setValue('除外（修正メールで差し替え）');
+    var oldNote = String(data[i][13] || '');
+    sheet.getRange(rowNum, 14).setValue(oldNote ? oldNote + ' / ' + stamp : stamp);
+    count++;
+  }
+  return count;
+}
+
+// 案件名の照合キー：市区名（…）、予備日表記、空白を除いたもの
+function ledgerProjectKey(name) {
+  return String(name)
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/[※＊]\s*\d{1,2}\s*(?:予備日)?/g, '')
+    .replace(/[\s　]+/g, '');
+}
+
 function getOrCreateLabel(labelName) {
   var labels = GmailApp.getUserLabels();
   for (var i = 0; i < labels.length; i++) {

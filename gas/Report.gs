@@ -40,10 +40,13 @@ function createCompletionReportDraft() {
     var qty = data[i][6];          // G: 部数
     var price = data[i][7];        // H: 単価
     var confirmStatus = String(data[i][11] || '');  // L: 確認ステータス
+    var billStatus = String(data[i][12] || '');     // M: 請求書反映ステータス
     var reported = data[i][REPORT_CONFIG.REPORT_STATUS_COL - 1]; // O列
 
     if (!projectName || projectName === '未抽出') continue;
     if (reported) continue;
+    // 修正メールで差し替えられた旧行・別請求の取引先は報告対象外
+    if (billStatus.indexOf('除外') === 0) continue;
 
     var endDate = parseDeliveryEndDate(deliveryDate, receivedAt);
     if (!endDate) continue;
@@ -293,9 +296,12 @@ function debugReportRows() {
   });
 }
 
-// 案件名から市区名と空白を除いた比較用キー
+// 案件名から市区名（…）・予備日表記・空白を除いた比較用キー
 function projectKey(name) {
-  return String(name).replace(/（[^）]+）$/, '').replace(/[\s　]+/g, '');
+  return String(name)
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/[※＊]\s*\d{1,2}\s*(?:予備日)?/g, '')
+    .replace(/[\s　]+/g, '');
 }
 
 function formatNumber(n) {
