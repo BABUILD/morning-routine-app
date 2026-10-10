@@ -71,15 +71,27 @@ function createCompletionReportDraft() {
     return;
   }
 
-  // ① 同じ案件＋配布日について、後から来たメールが「修正メール」（要確認）の場合だけ
-  //    最新メール由来の行に置き換える。修正でない別メール（追加地区など）は両方残す
+  // ① 同じ案件＋配布日の行が複数のメールから来ている場合は、修正検知の有無に関わらず
+  //    最新メール由来の行だけを集計する（旧行が残っていても部数が合算されない）
+  //    → 複数メールがあった案件は通知メールで知らせる（下書き本文には出さない）
   var latestByProject = {};
+  var mailsByProject = {};
   targets.forEach(function(t) {
     var key = projectKey(t.projectName) + '|' + t.deliveryDate;
-    var cur = latestByProject[key];
-    if (!cur || t.receivedAt > cur.receivedAt) {
-      latestByProject[key] = { receivedAt: t.receivedAt, isCorrection: t.isCorrection };
+    if (!latestByProject[key] || t.receivedAt > latestByProject[key]) {
+      latestByProject[key] = t.receivedAt;
     }
+    if (!mailsByProject[key]) mailsByProject[key] = {};
+    mailsByProject[key][t.receivedAt] = true;
+  });
+
+  var conflicts = [];
+  Object.keys(mailsByProject).forEach(function(key) {
+    var times = Object.keys(mailsByProject[key]);
+    if (times.length < 2) return;
+    var label = key.split('|');
+    var latestStr = Utilities.formatDate(new Date(latestByProject[key]), 'Asia/Tokyo', 'M/d HH:mm');
+    conflicts.push(label[0] + '（' + label[1] + '）：' + times.length + '通のメールあり → ' + latestStr + ' 受信分のみ集計');
   });
 
   // ② 同一メールが二重処理されて出来た完全重複行を除外する
@@ -88,8 +100,7 @@ function createCompletionReportDraft() {
   var countTargets = [];
   targets.forEach(function(t) {
     var key = projectKey(t.projectName) + '|' + t.deliveryDate;
-    var latest = latestByProject[key];
-    if (latest.isCorrection && t.receivedAt !== latest.receivedAt) return;
+    if (t.receivedAt !== latestByProject[key]) return;
 
     var rowKey = [String(t.projectName).replace(/[\s　]+/g, ''), t.deliveryDate,
                   t.method, t.qty, t.price].join('|');
@@ -155,7 +166,7 @@ function createCompletionReportDraft() {
     sheet.getRange(t.rowIdx, REPORT_CONFIG.REPORT_STATUS_COL).setValue(stamp);
   });
 
-  sendDraftNotification(subject, draftBody, dateOrder, countTargets.length);
+  sendDraftNotification(subject, draftBody, dateOrder, countTargets.length, conflicts);
 
   Logger.log('完了報告の下書きを作成しました：' + countTargets.length + '行（重複除外前 ' + targets.length + '行）');
 }
@@ -187,7 +198,8 @@ function markOldRowsAsReported() {
 }
 
 // 下書きを作成したことを知らせる通知メール
-function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
+// conflicts：同じ案件＋配布日が複数メールにあり、最新分のみ集計した案件の一覧
+function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount, conflicts) {
   try {
     var lines = [
       '配布完了報告のメール下書きを作成しました。',
@@ -197,7 +209,18 @@ function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
       '',
       '【対象】',
       '・完了日：' + dateOrder.join('、'),
-      '・台帳行数：' + rowCount + '行',
+      '・台帳行数：' + rowCount + '行'
+    ];
+
+    if (conflicts && conflicts.length > 0) {
+      lines.push('');
+      lines.push('【⚠️ 複数メールあり・要確認】');
+      lines.push('同じ案件＋配布日が複数のメールから台帳に入っています。');
+      lines.push('最新メールの分だけを集計しました。追加分の見落としや旧行の消し忘れがないか確認してください。');
+      conflicts.forEach(function(c) { lines.push('・' + c); });
+    }
+
+    lines = lines.concat([
       '',
       '【下書き本文プレビュー】',
       '----------------------------------------',
@@ -209,11 +232,12 @@ function sendDraftNotification(draftSubject, draftBody, dateOrder, rowCount) {
       '',
       '宛先は ' + REPORT_CONFIG.DRAFT_TO + ' が入力済みです。',
       '内容を確認のうえ送信してください。'
-    ];
+    ]);
 
+    var subjectPrefix = (conflicts && conflicts.length > 0) ? '【下書き作成完了・⚠️要確認】' : '【下書き作成完了】';
     MailApp.sendEmail(
       REPORT_CONFIG.NOTIFY_TO,
-      '【下書き作成完了】' + draftSubject,
+      subjectPrefix + draftSubject,
       lines.join('\n')
     );
   } catch (e) {
